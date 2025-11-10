@@ -1,0 +1,48 @@
+name: cdxgen CI/CD
+
+on:
+  push:
+    branches:
+    - main
+
+jobs:
+  generate_cyclonedx_sbom:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Node.js setup
+        uses: actions/setup-node@v6.0.0
+        with:
+          node-version: latest
+
+      - name: Install cdxgen
+        run: npm install -g @cyclonedx/cdxgen
+
+      - name: Install CycloneDX CLI
+        run: |
+          VERSION=0.29.1
+          OS=linux  # win (for Windows) and osx (for macOS)
+          ARCH=x64  # adjust if arm etc
+          FILENAME=cyclonedx-${OS}-${ARCH}   # may have other extensions for MacOS or Windows
+          wget https://github.com/CycloneDX/cyclonedx-cli/releases/download/v${VERSION}/${FILENAME}
+          chmod +x ${FILENAME}
+          sudo mv ${FILENAME} /usr/local/bin/cyclonedx
+          cyclonedx --version
+
+      - name: Generate SBOM for all languages
+        run: cdxgen -r -o cdxgen-sbom.json
+      
+      - name: Enrich SBOM with Metadata
+        run: cyclonedx add files --input-file cdxgen-sbom.json --output-file cdxgen-enriched.json --base-path . --include "*"
+
+      - name: Modify cdxgen SBOM using script
+        run: node scripts/modify-sbom.js
+
+      - name: Upload cdxgen SBOM as an artifact
+        uses: actions/upload-artifact@v5.0.0
+        with:
+          name: sbom
+          path: sbom-custom.json
