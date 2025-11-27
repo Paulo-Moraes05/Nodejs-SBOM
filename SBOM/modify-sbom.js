@@ -36,7 +36,9 @@ for (const comp of sbom.components || []) {
 
   // add filename following BSI's taxonomy
   if (!comp.properties.some(p => p.name === "bsi:component:filename")) {
-    srcFile.name = "bsi:component:filename"
+    srcFile.name = "bsi:component:filename";
+    const valueSlice = srcFile.value.slice(srcFile.value.lastIndexOf("/") + 1);
+    srcFile.value = valueSlice;
   }
 
 }
