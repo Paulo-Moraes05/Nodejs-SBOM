@@ -6,8 +6,13 @@ on:
     - main
 
 jobs:
-  generate_cyclonedx_sbom:
+  generate_and_modify_cyclonedx_sbom:
     runs-on: ubuntu-latest
+
+    permissions:
+      security-events: write
+      actions: read
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -32,17 +37,54 @@ jobs:
           sudo mv ${FILENAME} /usr/local/bin/cyclonedx
           cyclonedx --version
 
-      - name: Generate SBOM for all languages
-        run: cdxgen -r -o cdxgen-sbom.json
+      - name: Generate cdxgen SBOM for all supported languages
+        run: cdxgen -t universal -r -o cdxgen-sbom.json
       
-      - name: Enrich SBOM with Metadata
+      - name: Enrich cdxgen SBOM with Metadata
         run: cyclonedx add files --input-file cdxgen-sbom.json --output-file cdxgen-enriched.json --base-path . --include "*"
 
-      - name: Modify cdxgen SBOM using script
+      - name: Generate Syft SBOM for languages not supported by cdxgen
+        uses: anchore/sbom-action@v0.15.11
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: cyclonedx-syft-sbom.json
+          upload-artifact: false
+
+      - name: Convert Syft SBOM from CycloneDX 1.5 to CycloneDX 1.6
+        run: cyclonedx convert --input-file cyclonedx-syft-sbom.json --output-file cyclonedx-syft-sbom-1.6.json --input-format json --output-format json --output-version v1_6
+
+      - name: Enrich Syft SBOM with Metadata
+        run: cyclonedx add files --input-file cyclonedx-syft-sbom-1.6.json --output-file syft-enriched.json --base-path . --include "*"
+
+      - name: Scan for vulnerabilities in the Syft SBOM using Grype
+        uses: anchore/scan-action@v6
+        with:
+          sbom: cyclonedx-syft-sbom-1.6.json
+          severity-cutoff: critical
+          output-format: sarif
+          output-file: results-syft-sbom.sarif
+
+      - name: Merge cdxgen and Syft SBOMs
+        run: cyclonedx merge --input-files cdxgen-enriched.json syft-enriched.json --output-file merged-cyclonedx-sbom.json --input-format json --output-format json --output-version v1_6
+
+      - name: Modify SBOM using script
         run: node scripts/modify-sbom.js
+
+      - name: Generate an RSA public/private key pair
+        run: cyclonedx keygen --private-key-file sbom-private.key --public-key-file sbom-public.key   # defaults to private.key and public.key
+
+      - name: Convert merged SBOM to XML for signing
+        run: cyclonedx convert --input-file sbom-custom.json --output-file sbom-custom.xml --input-format json --output-format xml
+
+      - name: Sign SBOM using CycloneDX CLI
+        run: cyclonedx sign bom sbom-custom.xml --key-file sbom-private.key
+
+      - name: Verify SBOM using CycloneDX CLI
+        run: cyclonedx verify all sbom-custom.xml --key-file sbom-public.key
 
       - name: Upload cdxgen SBOM as an artifact
         uses: actions/upload-artifact@v5.0.0
         with:
-          name: sbom
-          path: sbom-custom.json
+          name: cdxgen-sbom-signed
+          path: sbom-custom.xml
