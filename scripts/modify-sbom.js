@@ -1,49 +1,76 @@
 import fs from "fs";
 
+// input and output paths
+const sbomPath = "merged-cyclonedx-sbom.json";
+const outPath = "sbom-custom.json";
+
 // read the JSON file
-const sbom = JSON.parse(fs.readFileSync("cdxgen-enriched.json", "utf8"));
+const sbom = JSON.parse(fs.readFileSync(sbomPath, "utf8"));
+
+function pickComponentTaxonomy(comp) {
+  const val = (comp || "").toLowerCase();
+  
+  if (/\.(tgz|tar|zip|arc|jar|war)$/i.test(val)) return "bsi:component:archive";
+  if (/\.(exe|apk|app|scr|bin)$/i.test(val)) return "bsi:component:executable";
+  if (/\.(csv|json|ini|yml|yaml|xml|html|css|js|ts|py|rb|php|go|rs|java|txt|md)$/i.test(val)) return "bsi:component:structured";
+
+  // return bsi:component:structured if component is not one of the types
+  return "bsi:component:structured";
+}
+
+function getFilename(comp) {
+  // if comp.properties is an array, use it, otherwise use an empty array
+  const props = Array.isArray(comp.properties) ? comp.properties : [];
+  const filenameProp =
+    props.find(
+      (p) =>
+        p.name.toLowerCase().includes("srcfile") ||
+        p.name.toLowerCase().includes("cdx:bom:componentsrcfiles") ||
+        p.name.startsWith("syft:location")
+    ) || null;
+
+  // if property exists, return it as filename
+  if (filenameProp?.value) return filenameProp.value;
+
+  // if component is a file, return the file name
+  if (comp.type === "file") return comp.name || "";
+
+  return comp.name || "";
+}
+
+function setTaxonomy(comp, taxonomy) {
+  comp.properties = Array.isArray(comp.properties) ? comp.properties : [];
+  comp.properties = comp.properties.filter(
+    (p) =>
+      p.name !== "bsi:component:structured" &&
+      p.name !== "bsi:component:archive" &&
+      p.name !== "bsi:component:executable"
+  );
+  comp.properties.push({ name: taxonomy, value: "true" });
+}
+  
+function ensureFileProperty(comp) {
+  if (!comp) return;
+
+  const filenameLike = getFilename(comp);
+  const taxonomy = pickComponentTaxonomy(filenameLike);
+
+  // set taxonomy for all components
+  setTaxonomy(comp, taxonomy);
+
+  // set bsi:component:filename only for components with type equal to file
+  if (comp.type === "file") {
+    comp.properties = Array.isArray(comp.properties) ? comp.properties : [];
+    if (!comp.properties.some((p) => p.name === "bsi:component:filename")) {
+      comp.properties.push({ name: "bsi:component:filename", value: comp.name || "" });
+    }
+  }
+}
 
 // loop through the components in the JSON file
 for (const comp of sbom.components || []) {
-  comp.properties = comp.properties || [];
-
-  // find the type of the component
-  const srcFile = (comp.properties || []).find(p => p.name.toLowerCase().includes("srcfile") || p.name.toLowerCase().includes("cdx:bom:componentsrcfiles"))
-
-  if (!srcFile) continue;
-
-  const value = srcFile.value.toLowerCase();
-  let taxonomy = "";
-
-  // search for a match for the specified RegExp
-  if (/\.(tgz|tar|zip|arc|jar|war)$/i.test(value)) {
-    taxonomy = "bsi:component:archive";
-  } else if (/\.(exe|apk|app|scr|bin)$/i.test(value)) {
-    taxonomy = "bsi:component:executable";
-  } else if (/\.(csv|json|ini|yml|yaml|xml|html|css|js)$/i.test(value)) {
-    taxonomy = "bsi:component:structured";
-  } else {
-    // default value for unknown component type
-    taxonomy = "bsi:component:structured";
-  }
-
-  if (!comp.properties.some(p => p.name === taxonomy)) {
-    comp.properties.push({
-      name: taxonomy,
-      value: "true",
-    });
-  }
-
-  // add filename following BSI's taxonomy
-  if (!comp.properties.some(p => p.name === "bsi:component:filename")) {
-    srcFile.name = "bsi:component:filename";
-    const valueSlice = srcFile.value.slice(srcFile.value.lastIndexOf("/") + 1);
-    srcFile.value = valueSlice;
-  }
-
+  ensureFileProperty(comp)
 }
 
-
-
-fs.writeFileSync("sbom-custom.json", JSON.stringify(sbom, null, 2));
+fs.writeFileSync(outPath, JSON.stringify(sbom, null, 2));
 console.log("Custom SBOM written to sbom-custom.json");
