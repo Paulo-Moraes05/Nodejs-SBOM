@@ -71,6 +71,12 @@ jobs:
       - name: Modify SBOM using script
         run: node scripts/modify-sbom.js
 
+      - name: Upload cdxgen SBOM as an artifact
+        uses: actions/upload-artifact@v5.0.0
+        with:
+          name: json-sbom
+          path: sbom-custom.json
+
       - name: Generate an RSA public/private key pair
         run: cyclonedx keygen --private-key-file sbom-private.key --public-key-file sbom-public.key   # defaults to private.key and public.key
 
